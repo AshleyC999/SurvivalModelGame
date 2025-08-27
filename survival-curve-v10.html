@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Survival Curve — v9 (stacking smoking, rare conditions, multi‑jump)</title>
+<style>
+  :root{
+    --bg:#070a13;
+    --fg:#e8eef9;
+    --accent:#6ad1ff;
+    --good:#8df59b;
+    --bad:#ff6b6b;
+    --muted:#9bb0c9;
+    --panel:#0f1626;
+    --panel-2:#0a1322;
+    --bar-bg:#1a2742;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,'Helvetica Neue',Arial,'Noto Sans',sans-serif;overflow:hidden}
+  #game{position:absolute;inset:0;display:block;background:linear-gradient(180deg,#060a12,#0c1729 60%,#070a13)}
+  .hud{position:absolute;top:12px;left:12px;background:rgba(10,19,34,.6);backdrop-filter:blur(6px);border:1px solid #223148;padding:10px 12px;border-radius:12px;min-width:340px;box-shadow:0 8px 30px rgba(0,0,0,.2);z-index:2}
+  .hud .row{display:flex;justify-content:space-between;gap:12px;line-height:1.2;margin:2px 0}
+  .hud .k{color:var(--muted)}
+  .hud .v{font-weight:600}
+  .bars{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+  .bar{position:relative;height:12px;background:var(--bar-bg);border:1px solid #223148;border-radius:999px;overflow:hidden}
+  .bar>span{display:block;height:100%}
+  .bar .fill-energy{background:var(--good);width:0%}
+  .btn{appearance:none;border:1px solid #2b3a58;background:var(--panel);color:var(--fg);padding:10px 14px;border-radius:12px;cursor:pointer;font-weight:600}
+  .btn:focus{outline:3px solid #3b82f6;outline-offset:2px}
+  .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);z-index:5}
+  .card{width:min(1000px,96vw);background:var(--panel);border:1px solid #2b3a58;border-radius:16px;box-shadow:0 30px 80px rgba(0,0,0,.35);padding:18px}
+  .card h1{margin:0 0 6px 0;font-size:26px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid.dev{grid-template-columns:repeat(3,1fr)}
+  .field{display:flex;flex-direction:column;gap:6px}
+  select, input[type=number]{background:var(--panel-2);border:1px solid #2b3a58;border-radius:10px;padding:10px;color:var(--fg);width:100%}
+  label{font-size:12px;color:var(--muted)}
+  .row-btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+  .muted{color:var(--muted);font-size:14px}
+  .chip{display:inline-flex;align-items:center;gap:6px;border:1px solid #2b3a58;background:var(--panel-2);padding:4px 8px;border-radius:999px;font-size:13px}
+  details.tuner{margin-top:10px}
+  details.tuner summary{cursor:pointer;user-select:none;padding:8px 10px;border:1px solid #2b3a58;border-radius:10px;background:var(--panel-2);font-weight:600}
+  .section{margin-top:12px;padding-top:8px;border-top:1px dashed #2b3a58}
+  .small{font-size:12px;color:#9bb0c9}
+  .hidden{display:none !important}
+  .hi-contrast{
+    --bg:#000; --fg:#fff; --accent:#fff; --panel:#000; --panel-2:#000; --muted:#bbb; --bad:#ff3333; --good:#33ff33; --bar-bg:#111;
+  }
+  footer.note{position:absolute;left:12px;bottom:10px;color:var(--muted);font-size:12px;z-index:2}
+</style>
+</head>
+<body>
+
+<canvas id="game" aria-label="Game canvas"></canvas>
+
+<div class="hud" id="hud">
+  <div class="row"><span class="k">Age</span><span class="v" id="hudAge">0.0</span></div>
+  <div class="row"><span class="k">Predicted death age</span><span class="v" id="hudEAD">–</span></div>
+  <div class="row"><span class="k">Crystals</span><span class="v" id="hudCrystals">0</span></div>
+  <div class="row"><span class="k">Goodies</span><span class="v" id="hudGood">0</span></div>
+  <div class="row"><span class="k">Hits</span><span class="v" id="hudBad">0</span></div>
+  <div class="row"><span class="k">Smoking level</span><span class="v" id="hudSmoke">0</span></div>
+  <div class="bars">
+    <div class="bar" title="Jump Energy"><span class="fill-energy" id="barEnergy"></span></div>
+  </div>
+</div>
+
+<!-- Start Overlay -->
+<div class="overlay" id="start">
+  <div class="card">
+    <h1>The Survival Curve</h1>
+    <p>Live QMortality drives when your run ends: the game finishes the moment your current age reaches your predicted age of death (EAD). Collect <strong>glowing teal crystals</strong> to boost XP.</p>
+    <div class="grid">
+      <div class="field">
+        <label for="sex">Sex</label>
+        <select id="sex">
+          <option value="M">Male</option>
+          <option value="F">Female</option>
+        </select>
+      </div>
+      <div class="field">
+        <label><input type="checkbox" id="highContrast" /> High contrast</label>
+        <label><input type="checkbox" id="reduceMotion" /> Reduce motion</label>
+      </div>
+      <div class="muted" style="grid-column:1/-1">
+        Controls: <strong>Space / W / ↑</strong> jump (uses energy). <strong>↓ / S</strong> duck. <strong>Esc</strong> pause.
+      </div>
+    </div>
+
+    <!-- DEV TUNER -->
+    <details class="tuner">
+      <summary>Developer fine‑tuning (optional)</summary>
+      <div class="section small">Adjust values then click “Apply tuning”. “Reset defaults” restores factory settings.</div>
+
+      <h3 class="section small">World &amp; Progression</h3>
+      <div class="grid dev">
+        <div class="field"><label>visualBaseSpeed</label><input id="w_visualBaseSpeed" type="number" step="1" value="220"></div>
+        <div class="field"><label>visualAccel</label><input id="w_visualAccel" type="number" step="1" value="60"></div>
+        <div class="field"><label>visualMaxSpeed</label><input id="w_visualMaxSpeed" type="number" step="1" value="900"></div>
+        <div class="field"><label>runSeconds</label><input id="w_runSeconds" type="number" step="1" value="110"></div>
+        <div class="field"><label>curveWindowYears</label><input id="w_curveWindowYears" type="number" step="1" value="20"></div>
+        <div class="field"><label>EAD recompute every (s)</label><input id="w_eadEvery" type="number" step="0.1" value="1.5"></div>
+      </div>
+
+      <h3 class="section small">Aging (time to end)</h3>
+      <div class="grid dev">
+        <div class="field"><label>minRateFactor</label><input id="a_minRateFactor" type="number" step="0.01" value="0.7"></div>
+        <div class="field"><label>maxRateFactor</label><input id="a_maxRateFactor" type="number" step="0.1" value="3.2"></div>
+        <div class="field"><label>badHitBoost</label><input id="a_badHitBoost" type="number" step="0.01" value="0.10"></div>
+        <div class="field"><label>goodHitRelief</label><input id="a_goodHitRelief" type="number" step="0.01" value="0.06"></div>
+        <div class="field"><label>passiveDrift</label><input id="a_passiveDrift" type="number" step="0.001" value="0.002"></div>
+      </div>
+
+      <h3 class="section small">Gradient (curve steepness)</h3>
+      <div class="grid dev">
+        <div class="field"><label>minFactor</label><input id="g_minFactor" type="number" step="0.01" value="0.7"></div>
+        <div class="field"><label>maxFactor</label><input id="g_maxFactor" type="number" step="0.1" value="1.8"></div>
+        <div class="field"><label>badStep</label><input id="g_badStep" type="number" step="0.01" value="0.10"></div>
+        <div class="field"><label>goodStep</label><input id="g_goodStep" type="number" step="0.01" value="0.08"></div>
+        <div class="field"><label>ease</label><input id="g_ease" type="number" step="0.01" value="0.06"></div>
+      </div>
+
+      <h3 class="section small">Energy &amp; Movement</h3>
+      <div class="grid dev">
+        <div class="field"><label>energy.max</label><input id="e_max" type="number" step="0.1" value="1.0"></div>
+        <div class="field"><label>energy.init</label><input id="e_init" type="number" step="0.1" value="0.9"></div>
+        <div class="field"><label>jumpCost</label><input id="e_jumpCost" type="number" step="0.01" value="0.24"></div>
+        <div class="field"><label>holdDrainPerSec</label><input id="e_holdDrain" type="number" step="0.01" value="0.35"></div>
+        <div class="field"><label>regenGroundPerSec</label><input id="e_regenG" type="number" step="0.01" value="0.40"></div>
+        <div class="field"><label>regenAirPerSec</label><input id="e_regenA" type="number" step="0.01" value="0.10"></div>
+        <div class="field"><label>minToJump</label><input id="e_minToJump" type="number" step="0.01" value="0.22"></div>
+        <div class="field"><label>jumpVel</label><input id="p_jumpVel" type="number" step="1" value="520"></div>
+        <div class="field"><label>gravity</label><input id="p_gravity" type="number" step="1" value="1420"></div>
+        <div class="field"><label>maxAirJumps</label><input id="p_maxAirJumps" type="number" step="1" value="1"></div>
+      </div>
+
+      <h3 class="section small">Spawns</h3>
+      <div class="grid dev">
+        <div class="field"><label>baseRate</label><input id="s_baseRate" type="number" step="0.1" value="1.9"></div>
+        <div class="field"><label>minGap</label><input id="s_minGap" type="number" step="1" value="60"></div>
+        <div class="field"><label>goodShare</label><input id="s_goodShare" type="number" step="0.01" value="0.30"></div>
+        <div class="field"><label>crystalShareBase</label><input id="s_crystalBase" type="number" step="0.01" value="0.10"></div>
+        <div class="field"><label>crystalShareMax</label><input id="s_crystalMax" type="number" step="0.01" value="0.22"></div>
+        <div class="field"><label>conditionShare (rare)</label><input id="s_conditionShare" type="number" step="0.01" value="0.06"></div>
+      </div>
+
+      <h3 class="section small">Scoring (XP)</h3>
+      <div class="grid dev">
+        <div class="field"><label>xp per crystal</label><input id="x_perCrystal" type="number" step="100" value="1000"></div>
+        <div class="field"><label>xp per year over 70</label><input id="x_perYearOver70" type="number" step="100" value="1000"></div>
+      </div>
+
+      <div class="row-btns" style="margin-top:12px">
+        <button class="btn" id="btnApplyTuning">Apply tuning</button>
+        <button class="btn" id="btnResetDefaults">Reset defaults</button>
+      </div>
+    </details>
+
+    <div class="row-btns">
+      <button class="btn" id="btnStart">Start</button>
+    </div>
+  </div>
+</div>
+
+<!-- Pause Overlay -->
+<div class="overlay hidden" id="pause">
+  <div class="card">
+    <h2>Paused</h2>
+    <div class="row-btns">
+      <button class="btn" id="btnResume">Resume</button>
+      <button class="btn" id="btnQuit">Quit</button>
+    </div>
+  </div>
+</div>
+
+<!-- Results Overlay -->
+<div class="overlay hidden" id="results">
+  <div class="card">
+    <h2>Results</h2>
+    <div class="grid">
+      <div>
+        <div class="row"><span class="k">Age at death (live EAD)</span> <span class="v" id="resDeathAge">–</span></div>
+        <div class="row"><span class="k">Crystals collected</span> <span class="v" id="resCrystals">–</span></div>
+        <div class="row"><span class="k">XP</span> <span class="v" id="resXP">–</span></div>
+        <div class="row" style="margin-top:8px;gap:10px">
+          <span class="chip"><span style="display:inline-block;width:10px;height:10px;background:#9bb0c9;border-radius:2px;margin-right:6px"></span>Baseline curve</span>
+          <span class="chip"><span style="display:inline-block;width:10px;height:10px;background:#6ad1ff;border-radius:2px;margin-right:6px"></span>Actual curve</span>
+        </div>
+      </div>
+      <div>
+        <canvas id="chart" width="600" height="220" aria-label="Survival curve chart"></canvas>
+      </div>
+    </div>
+    <details style="margin-top:12px">
+      <summary>Model inputs</summary>
+      <pre id="modelInputs" style="white-space:pre-wrap;background:var(--panel-2);padding:10px;border:1px solid #2b3a58;border-radius:10px"></pre>
+    </details>
+    <div class="row-btns">
+      <button class="btn" id="btnAgain">Play again</button>
+      <button class="btn" id="btnToggleContrast">Toggle high contrast</button>
+    </div>
+  </div>
+</div>
+
+<footer class="note">Not medical advice. QMortality-2017 © 2017 ClinRisk Ltd. (AGPLv3+)</footer>
+
+<script>
+/* ---------------------------- CONFIG DEFAULTS ---------------------------- */
+const CONFIG = {
+  world: { visualBaseSpeed: 220, visualAccel: 60, visualMaxSpeed: 900, runSeconds: 110, curveWindowYears: 20, eadRecalcEveryS: 1.5 },
+  aging: { minRateFactor: 0.7, maxRateFactor: 3.2, badHitBoost: 0.10, goodHitRelief: 0.06, passiveDrift: 0.002 },
+  gradient: { minFactor: 0.7, maxFactor: 1.8, badStep: 0.10, goodStep: 0.08, ease: 0.06 },
+  player: { x: 180, radius: 18, jumpVel: 520, gravity: 1420, maxFall: 1000, duckScale: 0.65, coyoteMs: 110, bufferMs: 110, maxAirJumps: 5 },
+  energy: { max: 1.0, init: 0.9, jumpCost: 0., holdDrainPerSec: 0.35, regenGroundPerSec: 0.40, regenAirPerSec: 0.10, minToJump: 0.22 },
+  spawn: {
+    baseRate: 1.9, minGap: 60, goodShare: 0.30,
+    crystalShareBase: 0.10, crystalShareMax: 0.22,
+    conditionShare: 0.06,
+    airYOffsetChoices: [-140,-90,-40,10,60,110]
+  },
+  xp: { perCrystal: 1000, perYearOver70: 1000 }
+};
+const DEFAULTS = JSON.parse(JSON.stringify(CONFIG));
+
+let hiContrast=false, reduceMotion=false;
+
+/* ---------------------------- DEV TUNER ---------------------------- */
+function setVal(id, v){ const el=document.getElementById(id); if(el) el.value = String(v); }
+function getNum(id){ const el=document.getElementById(id); return el? Number(el.value): NaN; }
+
+function loadDefaultsToForm(){
+  setVal('w_visualBaseSpeed', CONFIG.world.visualBaseSpeed);
+  setVal('w_visualAccel', CONFIG.world.visualAccel);
+  setVal('w_visualMaxSpeed', CONFIG.world.visualMaxSpeed);
+  setVal('w_runSeconds', CONFIG.world.runSeconds);
+  setVal('w_curveWindowYears', CONFIG.world.curveWindowYears);
+  setVal('w_eadEvery', CONFIG.world.eadRecalcEveryS);
+
+  setVal('a_minRateFactor', CONFIG.aging.minRateFactor);
+  setVal('a_maxRateFactor', CONFIG.aging.maxRateFactor);
+  setVal('a_badHitBoost', CONFIG.aging.badHitBoost);
+  setVal('a_goodHitRelief', CONFIG.aging.goodHitRelief);
+  setVal('a_passiveDrift', CONFIG.aging.passiveDrift);
+
+  setVal('g_minFactor', CONFIG.gradient.minFactor);
+  setVal('g_maxFactor', CONFIG.gradient.maxFactor);
+  setVal('g_badStep', CONFIG.gradient.badStep);
+  setVal('g_goodStep', CONFIG.gradient.goodStep);
+  setVal('g_ease', CONFIG.gradient.ease);
+
+  setVal('e_max', CONFIG.energy.max);
+  setVal('e_init', CONFIG.energy.init);
+  setVal('e_jumpCost', CONFIG.energy.jumpCost);
+  setVal('e_holdDrain', CONFIG.energy.holdDrainPerSec);
+  setVal('e_regenG', CONFIG.energy.regenGroundPerSec);
+  setVal('e_regenA', CONFIG.energy.regenAirPerSec);
+  setVal('e_minToJump', CONFIG.energy.minToJump);
+  setVal('p_jumpVel', CONFIG.player.jumpVel);
+  setVal('p_gravity', CONFIG.player.gravity);
+  setVal('p_maxAirJumps', CONFIG.player.maxAirJumps);
+
+  setVal('s_baseRate', CONFIG.spawn.baseRate);
+  setVal('s_minGap', CONFIG.spawn.minGap);
+  setVal('s_goodShare', CONFIG.spawn.goodShare);
+  setVal('s_crystalBase', CONFIG.spawn.crystalShareBase);
+  setVal('s_crystalMax', CONFIG.spawn.crystalShareMax);
+  setVal('s_conditionShare', CONFIG.spawn.conditionShare);
+
+
+  setVal('x_perCrystal', CONFIG.xp.perCrystal);
+  setVal('x_perYearOver70', CONFIG.xp.perYearOver70);
+}
+
+function applyTuningFromForm(){
+  CONFIG.world.visualBaseSpeed = getNum('w_visualBaseSpeed');
+  CONFIG.world.visualAccel = getNum('w_visualAccel');
+  CONFIG.world.visualMaxSpeed = getNum('w_visualMaxSpeed');
+  CONFIG.world.runSeconds = getNum('w_runSeconds');
+  CONFIG.world.curveWindowYears = getNum('w_curveWindowYears');
+  CONFIG.world.eadRecalcEveryS = getNum('w_eadEvery');
+
+  CONFIG.aging.minRateFactor = getNum('a_minRateFactor');
+  CONFIG.aging.maxRateFactor = getNum('a_maxRateFactor');
+  CONFIG.aging.badHitBoost = getNum('a_badHitBoost');
+  CONFIG.aging.goodHitRelief = getNum('a_goodHitRelief');
+  CONFIG.aging.passiveDrift = getNum('a_passiveDrift');
+
+  CONFIG.gradient.minFactor = getNum('g_minFactor');
+  CONFIG.gradient.maxFactor = getNum('g_maxFactor');
+  CONFIG.gradient.badStep = getNum('g_badStep');
+  CONFIG.gradient.goodStep = getNum('g_goodStep');
+  CONFIG.gradient.ease = getNum('g_ease');
+
+  CONFIG.energy.max = getNum('e_max');
+  CONFIG.energy.init = getNum('e_init');
+  CONFIG.energy.jumpCost = getNum('e_jumpCost');
+  CONFIG.energy.holdDrainPerSec = getNum('e_holdDrain');
+  CONFIG.energy.regenGroundPerSec = getNum('e_regenG');
+  CONFIG.energy.regenAirPerSec = getNum('e_regenA');
+  CONFIG.energy.minToJump = getNum('e_minToJump');
+
+  CONFIG.player.jumpVel = getNum('p_jumpVel');
+  CONFIG.player.gravity = getNum('p_gravity');
+  CONFIG.player.maxAirJumps = Math.max(0, Math.floor(getNum('p_maxAirJumps')));
+
+  CONFIG.spawn.baseRate = getNum('s_baseRate');
+  CONFIG.spawn.minGap = getNum('s_minGap');
+  CONFIG.spawn.goodShare = getNum('s_goodShare');
+  CONFIG.spawn.crystalShareBase = getNum('s_crystalBase');
+  CONFIG.spawn.crystalShareMax = getNum('s_crystalMax');
+  CONFIG.spawn.conditionShare = getNum('s_conditionShare');
+
+  CONFIG.xp.perCrystal = getNum('x_perCrystal');
+  CONFIG.xp.perYearOver70 = getNum('x_perYearOver70');
+}
+
+function resetDefaults(){
+  Object.assign(CONFIG.world, DEFAULTS.world);
+  Object.assign(CONFIG.aging, DEFAULTS.aging);
+  Object.assign(CONFIG.gradient, DEFAULTS.gradient);
+  Object.assign(CONFIG.player, DEFAULTS.player);
+  Object.assign(CONFIG.energy, DEFAULTS.energy);
+  Object.assign(CONFIG.spawn, DEFAULTS.spawn);
+  Object.assign(CONFIG.xp, DEFAULTS.xp);
+  loadDefaultsToForm();
+}
+
+/* ---------------------------- DOM ---------------------------- */
+const cvs = document.getElementById('game'); const ctx = cvs.getContext('2d');
+let W=innerWidth,H=innerHeight; cvs.width=W; cvs.height=H;
+addEventListener('resize',()=>{W=innerWidth;H=innerHeight;cvs.width=W;cvs.height=H;});
+const hudAge=document.getElementById('hudAge'), hudEAD=document.getElementById('hudEAD'), hudCrystals=document.getElementById('hudCrystals'), hudGood=document.getElementById('hudGood'), hudBad=document.getElementById('hudBad'), hudSmoke=document.getElementById('hudSmoke');
+const barEnergy=document.getElementById('barEnergy');
+const startEl=document.getElementById('start'), pauseEl=document.getElementById('pause'), resultsEl=document.getElementById('results');
+const btnStart=document.getElementById('btnStart'), btnResume=document.getElementById('btnResume'), btnQuit=document.getElementById('btnQuit'), btnAgain=document.getElementById('btnAgain'), btnToggleContrast=document.getElementById('btnToggleContrast');
+const selSex=document.getElementById('sex'); const chkHC=document.getElementById('highContrast'); const chkRM=document.getElementById('reduceMotion');
+const resDeathAge=document.getElementById('resDeathAge'), resCrystals=document.getElementById('resCrystals'), resXP=document.getElementById('resXP');
+const chartCvs=document.getElementById('chart'), chartCtx=chartCvs.getContext('2d');
+const btnApplyTuning=document.getElementById('btnApplyTuning'), btnResetDefaults=document.getElementById('btnResetDefaults');
+btnApplyTuning.addEventListener('click',()=>{ applyTuningFromForm(); alert('Tuning applied. Press Start to play with these settings.'); });
+btnResetDefaults.addEventListener('click',()=>{ resetDefaults(); alert('Defaults restored.'); });
+loadDefaultsToForm();
+
+/* ---------------------------- Game State ---------------------------- */
+let game=null, loopHandle=null;
+function newGame(){
+  const sex = selSex.value==='F'?'F':'M';
+  hiContrast = chkHC.checked; reduceMotion = chkRM.checked; document.body.classList.toggle('hi-contrast',hiContrast);
+
+  const baselineParams = buildQParams({ledger:healthyLedger(), sex}, false);
+  const baseline = buildSurvivalCurveFromBirth(sex, baselineParams);
+  const baseAgeRate = 1/CONFIG.world.runSeconds;
+
+  return {
+    running:true, paused:false, ended:false,
+    t:0, ageProgress:0, baseAgeRate, ageRate: baseAgeRate,
+    sex, speed:CONFIG.world.visualBaseSpeed,
+    good:0, bad:0, crystals:0, items:[], lastSpawnAcc:0,
+    sled:{ x:180, y:H*0.6, vy:0, onGround:true, lastGround:0, lastJumpPress:-999, ducking:false, jumpsUsed:0 },
+    energy: CONFIG.energy.init, holdingJump:false,
+    baseline, actualLedger: playerLedger(),
+    gradFactor: 1.0, gradTarget: 1.0,
+    particles:[], toasts:[],
+    actParams: buildQParams({ledger:playerLedger(), sex}, true),
+    ead: null, eadDirty: true, eadTimer: 0, deathAge:null
+  };
+}
+function healthyLedger(){ return { smokeCat:0, bmiDelta:0, b_asthmacopd:0, b_cvd:0, b_type2:0 }; }
+function playerLedger(){ return { smokeCat:0, bmiDelta:0, b_asthmacopd:0, b_cvd:0, b_type2:0 }; }
+
+/* ---------------------------- Input ---------------------------- */
+const Keys={jump:false,duck:false};
+addEventListener('keydown',e=>{ if(e.code==='Space'||e.code==='ArrowUp'||e.code==='KeyW'){ Keys.jump=true; if(game) game.sled.lastJumpPress=performance.now(); e.preventDefault();} if(e.code==='ArrowDown'||e.code==='KeyS'){ Keys.duck=true;} if(e.code==='Escape'){ if(game&&game.running&&!game.ended){ togglePause(true);} } });
+addEventListener('keyup',e=>{ if(e.code==='Space'||e.code==='ArrowUp'||e.code==='KeyW'){ Keys.jump=false; if(game) game.holdingJump=false; } if(e.code==='ArrowDown'||e.code==='KeyS'){ Keys.duck=false;} });
+btnStart.addEventListener('click',()=>{ applyTuningFromForm(); startEl.classList.add('hidden'); game=newGame(); loopStart(); });
+function togglePause(p){ game.paused=p; if(p){ pauseEl.classList.remove('hidden'); } else { pauseEl.classList.add('hidden'); game.lastLoop=performance.now(); requestAnimationFrame(loop);} }
+btnAgain.addEventListener('click',()=>{ resultsEl.classList.add('hidden'); startEl.classList.remove('hidden'); });
+btnResume && btnResume.addEventListener('click',()=>togglePause(false));
+btnQuit && btnQuit.addEventListener('click',()=>{ pauseEl.classList.add('hidden'); resultsEl.classList.add('hidden'); startEl.classList.remove('hidden'); cancelAnimationFrame(loopHandle); });
+
+/* ---------------------------- Survival Curves ---------------------------- */
+function buildSurvivalCurveFromBirth(sex, params){
+  const ages=[], S=[];
+  const S_adult=[], ages_adult=[]; let s=1; const a0=20; ages_adult.push(a0); S_adult.push(1);
+  for(let a=a0;a<100;a++){ const p=qMortalityOneYearRisk(sex,Math.max(20,a),params); s*=(1-p); ages_adult.push(a+1); S_adult.push(s); }
+  const childPts=[{a:0,S:0.995},{a:5,S:0.993},{a:10,S:0.992},{a:15,S:0.990},{a:20,S:1.0}];
+  for(let a=0;a<=100;a++){
+    if(a<=20){
+      let seg=null; for(let i=0;i<childPts.length-1;i++){ if(a>=childPts[i].a && a<=childPts[i+1].a){ seg={p0:childPts[i],p1:childPts[i+1]}; break; } }
+      const t=(a-seg.p0.a)/(seg.p1.a-seg.p0.a); ages.push(a); S.push(seg.p0.S + t*(seg.p1.S-seg.p0.S));
+    } else { const idx=a-20; ages.push(a); S.push(S_adult[idx]); }
+  }
+  return {ages,S};
+}
+function expectedAge(a0,ages,S){ let area=0; for(let i=0;i<ages.length-1;i++){ const dx=ages[i+1]-ages[i]; area += 0.5*(S[i]+S[i+1])*dx; } return a0+area; }
+
+function computeEAD(sex, actParams){
+  const ages=[], S=[];
+  const childPts=[{a:0,S:0.995},{a:5,S:0.993},{a:10,S:0.992},{a:15,S:0.990},{a:20,S:1.0}];
+  for(let a=0;a<=20;a++){
+    let seg=null; for(let i=0;i<childPts.length-1;i++){ if(a>=childPts[i].a && a<=childPts[i+1].a){ seg={p0:childPts[i],p1:childPts[i+1]}; break; } }
+    const t=(a-seg.p0.a)/(seg.p1.a-seg.p0.a); ages.push(a); S.push(seg.p0.S + t*(seg.p1.S-seg.p0.S));
+  }
+  let s=S[S.length-1];
+  for(let a=20;a<100;a++){
+    const p=qMortalityOneYearRisk(sex,a,actParams);
+    s*= (1-p); ages.push(a+1); S.push(s);
+  }
+  return expectedAge(0,ages,S);
+}
+
+/* ---------------------------- Geometry on curve ---------------------------- */
+function effectiveAge(a){
+  const f = game.gradFactor;
+  const a0 = 20;
+  if(a<=a0) return a;
+  return a0 + (a - a0) * f;
+}
+function yOnCurve(age){
+  const aEff = Math.max(0, Math.min(100, effectiveAge(age)));
+  const idx = Math.floor(aEff); const frac = aEff - idx;
+  const S0 = game.baseline.S[idx]; const S1 = game.baseline.S[Math.min(100, idx+1)];
+  const Sinterp = S0 + (S1 - S0)*frac;
+  const top = H*0.25, bottom = H*0.9;
+  return top + (1 - Sinterp) * (bottom - top);
+}
+function ageAtScreenX(x,currentAge){ const years=CONFIG.world.curveWindowYears; const start=currentAge-2; return Math.max(0,Math.min(100, start + (x/W)*years)); }
+
+/* ---------------------------- Items ---------------------------- */
+const CONDITIONS = [
+  {key:'b_cvd', name:'Cardiovascular disease', icon:'🫀'},
+  {key:'b_asthmacopd', name:'COPD/Asthma', icon:'🌬️'},
+  {key:'b_type2', name:'Type 2 diabetes', icon:'🩸'},
+  {key:'b_AF', name:'Atrial fibrillation', icon:'💓'},
+  {key:'b_CCF', name:'Heart failure', icon:'💔'},
+  {key:'b_anycancer', name:'Cancer', icon:'🧬'},
+  {key:'b_dementia', name:'Dementia', icon:'🧠'},
+  {key:'b_epilepsy', name:'Epilepsy', icon:'⚡'},
+  {key:'b_learning', name:'Learning disability', icon:'🔣'},
+  {key:'b_legulcer', name:'Leg ulcer', icon:'🦵'},
+  {key:'b_liverpancreas', name:'Liver/pancreas disease', icon:'🫁'},
+  {key:'b_parkinsons', name:'Parkinson’s', icon:'🧠'},
+  {key:'b_poormobility', name:'Poor mobility', icon:'🦯'},
+  {key:'b_ra', name:'Rheumatoid arthritis', icon:'🦴'},
+  {key:'b_renal', name:'Renal disease', icon:'🫘'},
+  {key:'b_type1', name:'Type 1 diabetes', icon:'🧪'},
+  {key:'b_vte', name:'VTE (blood clots)', icon:'🩹'},
+  {key:'c_hb', name:'Anaemia (low Hb)', icon:'🩺'},
+  {key:'high_lft', name:'High LFT', icon:'🧫'},
+  {key:'high_platlet', name:'High platelets', icon:'🧪'},
+  {key:'s1_appetiteloss', name:'Appetite loss', icon:'🍽️'},
+  {key:'s1_dyspnoea', name:'Breathlessness', icon:'😮‍💨'},
+  {key:'s1_weightloss', name:'Weight loss', icon:'⚖️'}
+];
+const EMOJI = {
+  bad_ground:['🚬','🍔'],
+  bad_air:['🍟'],
+  bad_death:['💀'],   // NEW instant-death hazard
+  good_air:['🥗','🍎','🩹','👟','🩺']
+};
+
+function spawnItems(dt, currentAge){
+  const hazard = 1 - (game.baseline.S[Math.floor(Math.min(99,effectiveAge(currentAge))) ] || 0.99);
+  const rate = clamp(CONFIG.spawn.baseRate * (1.3 + hazard*10), 0, 4.5);
+  game.lastSpawnAcc += dt*rate;
+  while(game.lastSpawnAcc >= 1){
+    game.lastSpawnAcc -= 1;
+    const groundY = yOnCurve(currentAge);
+    const makeAir = Math.random() < (0.55 + hazard*0.3);
+
+    // CONDITIONS (rare)
+    if(Math.random() < CONFIG.spawn.conditionShare){
+      const cond = CONDITIONS[Math.floor(Math.random()*CONDITIONS.length)];
+      const dy = CONFIG.spawn.airYOffsetChoices;
+      const y = groundY + (makeAir ? dy[Math.floor(Math.random()*dy.length)] : 0);
+      game.items.push({type:'condition', cond, x: W+40, y, w:34,h:34, hit:false, speedBoost: rand(60,140)});
+      continue;
+    }
+
+    const crystalChance = CONFIG.spawn.crystalShareBase + (CONFIG.spawn.crystalShareMax - CONFIG.spawn.crystalShareBase) * Math.min(1, currentAge/100);
+
+    if(makeAir && Math.random() < crystalChance){
+      const dy = CONFIG.spawn.airYOffsetChoices;
+      const y = groundY + dy[Math.floor(Math.random()*dy.length)];
+      game.items.push({type:'crystal', x: W+40, y, w:28,h:28, hit:false, speedBoost: 40+Math.random()*60, t:0});
+      continue;
+    }
+    if(makeAir){
+  // 5% chance to spawn instant-death 💀 hazard
+  if(Math.random() < 0.05){
+    const dy = CONFIG.spawn.airYOffsetChoices;
+    const y = groundY + dy[Math.floor(Math.random()*dy.length)];
+    game.items.push({type:'bad_death', emoji: pick(EMOJI.bad_death), x: W+40, y, w:36,h:36, hit:false, speedBoost: rand(60,140)});
+  } else {
+    const isGood = Math.random() < (CONFIG.spawn.goodShare + 0.15*hazard);
+    const dy = CONFIG.spawn.airYOffsetChoices;
+    const y = groundY + dy[Math.floor(Math.random()*dy.length)];
+    const emoji = isGood ? pick(EMOJI.good_air) : pick(EMOJI.bad_air);
+    game.items.push({type:isGood?'good_air':'bad_air', emoji, x: W+40, y, w:34,h:34, hit:false, speedBoost: rand(60,140)});
+  }
+}else{
+  const emoji = pick(EMOJI.bad_ground);
+  const lastX = game.items.length ? game.items[game.items.length-1].x : W;
+  const x = Math.max(W+40, lastX + CONFIG.spawn.minGap);
+  game.items.push({type:'bad_ground', emoji, x, y: groundY, w:36,h:30, hit:false, speedBoost:0});
+}
+  }
+}
+function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+function rand(a,b){ return Math.random()*(b-a)+a; }
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+function lerp(a,b,t){ return a+(b-a)*t; }
+
+/* ---------------------------- Particles & Toasts ---------------------------- */
+function burstConfetti(x,y, good=true){
+  const N = 60;
+  for(let i=0;i<N;i++){
+    const ang = Math.random()*Math.PI*2;
+    const spd = 100 + Math.random()*260;
+    const vx = Math.cos(ang)*spd, vy=Math.sin(ang)*spd - 120;
+    const life = 600 + Math.random()*500;
+    const size = 2 + Math.random()*3;
+    const color = good ? (i%2? '#8df59b':'#6ad1ff') : (i%2? '#ff6b6b':'#f3a56a');
+    game.particles.push({x,y,vx,vy,life,age:0,size,color});
+  }
+}
+function addToast(x,y,text, good=true){
+  game.toasts.push({x,y,text,age:0,life:1200,good});
+}
+
+/* ---------------------------- Loop ---------------------------- */
+function loopStart(){ game.lastLoop=performance.now(); loopHandle=requestAnimationFrame(loop); }
+function loop(){
+  if(!game||!game.running||game.paused) return;
+  const now=performance.now(); let dt=(now-game.lastLoop)/1000; if(dt>0.06) dt=0.06; game.lastLoop=now;
+  update(dt); render(); loopHandle=requestAnimationFrame(loop);
+}
+function update(dt){
+  game.t += dt;
+
+  game.gradFactor = clamp( lerp(game.gradFactor, game.gradTarget, CONFIG.gradient.ease), CONFIG.gradient.minFactor, CONFIG.gradient.maxFactor );
+
+  const base = 1/CONFIG.world.runSeconds;
+  game.baseAgeRate = base;
+  game.ageRate += (base - game.ageRate) * CONFIG.aging.passiveDrift;
+  game.ageProgress = clamp(game.ageProgress + game.ageRate*dt, 0, 1);
+  const currentAge = game.ageProgress * 100;
+
+  game.eadTimer += dt;
+  if(game.eadDirty || game.eadTimer >= CONFIG.world.eadRecalcEveryS){
+    game.ead = computeEAD(game.sex, game.actParams);
+    game.eadTimer = 0; game.eadDirty=false;
+  }
+  if(game.ead && currentAge >= game.ead && !game.ended){ game.deathAge = game.ead; endRun(); return; }
+
+  const hazard = 1 - (game.baseline.S[Math.floor(Math.min(99,effectiveAge(currentAge)))] || 0.99);
+  const targetSpeed = clamp(CONFIG.world.visualBaseSpeed + (CONFIG.world.visualAccel * (game.t/60))*60 + hazard*500, CONFIG.world.visualBaseSpeed, CONFIG.world.visualMaxSpeed);
+  game.speed = lerp(game.speed, targetSpeed, 0.02);
+
+  spawnItems(dt, currentAge);
+  for(const it of game.items){ it.x -= (game.speed + (it.speedBoost||0))*dt; if(it.type==='crystal'){ it.t+=dt; } }
+  game.items = game.items.filter(it=>it.x>-80);
+
+  const p=game.sled; p.vy += CONFIG.player.gravity*dt; p.vy = clamp(p.vy,-2000,CONFIG.player.maxFall); p.y += p.vy*dt;
+  const gy=yOnCurve(currentAge);
+  if(p.y>=gy){ p.y=gy; if(!p.onGround){ p.onGround=true; p.lastGround=performance.now(); p.jumpsUsed=0; } p.vy=0; } else { p.onGround=false; }
+  p.ducking = Keys.duck && p.onGround;
+
+  if(p.onGround) game.energy = clamp(game.energy + CONFIG.energy.regenGroundPerSec*dt, 0, CONFIG.energy.max);
+  else game.energy = clamp(game.energy + CONFIG.energy.regenAirPerSec*dt, 0, CONFIG.energy.max);
+  if(game.holdingJump) game.energy = clamp(game.energy - CONFIG.energy.holdDrainPerSec*dt, 0, CONFIG.energy.max);
+
+  if(Keys.jump) game.sled.lastJumpPress=performance.now();
+  const canCoyote=(performance.now()-p.lastGround)<=CONFIG.player.coyoteMs, buffered=(performance.now()-p.lastJumpPress)<=CONFIG.player.bufferMs;
+  if(buffered){
+    const canJumpFromGround = p.onGround || canCoyote;
+    const canMidAir = !p.onGround && p.jumpsUsed < CONFIG.player.maxAirJumps;
+    if(game.energy >= CONFIG.energy.minToJump && (canJumpFromGround || canMidAir)){
+      p.vy = -CONFIG.player.jumpVel;
+      p.onGround=false; game.sled.lastJumpPress=-999;
+      game.energy = clamp(game.energy - CONFIG.energy.jumpCost, 0, CONFIG.energy.max);
+      game.holdingJump=true;
+      if(!canJumpFromGround) p.jumpsUsed += 1;
+    }
+  }
+  if(!Keys.jump) game.holdingJump=false;
+
+  handleCollisions(gy, currentAge);
+
+  for(const prt of game.particles){
+    prt.age += dt*1000;
+    prt.x += prt.vx*dt; prt.y += prt.vy*dt; prt.vy += 900*dt;
+  }
+  game.particles = game.particles.filter(p=>p.age < p.life);
+  for(const t of game.toasts){ t.age += dt*1000; t.y -= 20*dt; }
+  game.toasts = game.toasts.filter(t=>t.age < t.life);
+
+  barEnergy.style.width = (game.energy/CONFIG.energy.max*100).toFixed(1)+'%';
+  hudAge.textContent=currentAge.toFixed(1);
+  hudEAD.textContent = game.ead? game.ead.toFixed(1): '…';
+  hudCrystals.textContent = game.crystals;
+  hudGood.textContent=game.good;
+  hudBad.textContent=game.bad;
+  hudSmoke.textContent=String(game.actualLedger.smokeCat);
+}
+
+/* ---------------------------- Collision Handling ---------------------------- */
+function handleCollisions(groundY, currentAge){
+  const p=game.sled; const size=CONFIG.player.radius*(p.ducking?CONFIG.player.duckScale:1);
+  const box={x:p.x-size,y:p.y-size,w:size*2,h:size*2};
+
+  for(const it of game.items){
+    if(it.hit) continue;
+    const ibox={x:it.x-16,y:it.y-16,w:32,h:32};
+    let collide = rectsOverlap(box,ibox);
+    if(!collide) continue;
+
+    if(it.type==='crystal'){ onCrystal(it); continue; }
+    if(it.type==='condition'){ onCondition(it, currentAge); continue; }
+    if(it.type==='bad_death'){ onDeath(it); continue; }
+
+    const airborne=(p.y<groundY-2);
+    if(it.type==='bad_ground' && !airborne){ onImpact(it,false,currentAge); }
+    else if(it.type==='bad_air' && airborne){ onImpact(it,false,currentAge); }
+    else if(it.type==='good_air' && airborne){ onImpact(it,true,currentAge); }
+  }
+}
+function rectsOverlap(a,b){ return a.x<b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y; }
+
+function onCrystal(it){
+  it.hit=true; game.crystals++;
+  burstConfetti(it.x, it.y-10, true);
+  addToast(it.x, it.y-24, '+1 crystal', true);
+}
+
+function onCondition(it, currentAge){
+  it.hit=true;
+  const key = it.cond.key;
+  game.actualLedger[key] = 1;
+
+  game.bad++; 
+  game.gradTarget = clamp(game.gradTarget * (1 + CONFIG.gradient.badStep), CONFIG.gradient.minFactor, CONFIG.gradient.maxFactor);
+  const base = game.baseAgeRate;
+  game.ageRate = clamp(game.ageRate * (1 + CONFIG.aging.badHitBoost), base*CONFIG.aging.minRateFactor, base*CONFIG.aging.maxRateFactor);
+
+  const ageForRisk = Math.max(20, Math.min(99, Math.floor(currentAge)));
+  const rBefore = qMortalityOneYearRisk(game.sex, ageForRisk, game.actParams);
+  game.actParams = buildQParams({ledger:game.actualLedger, sex:game.sex}, true);
+  game.eadDirty = true;
+  const rAfter = qMortalityOneYearRisk(game.sex, ageForRisk, game.actParams);
+  const d = rAfter - rBefore;
+  const pp = (d*100).toFixed(2);
+  addToast(it.x, it.y-24, `☠ ${it.cond.name}: ${d>=0?'+':''}${pp} pp → ${(rAfter*100).toFixed(2)}%`, false);
+  burstConfetti(it.x, it.y-10, false);
+}
+function onDeath(it){
+  it.hit = true;
+  burstConfetti(it.x, it.y-10, false);
+  addToast(it.x, it.y-24, '☠ Instant death!', false);
+  game.deathAge = game.ageProgress * 100;
+  endRun(); // immediately end the run
+}
+
+function onImpact(it, isGood, currentAge){
+  it.hit=true;
+  const ageForRisk = Math.max(20, Math.min(99, Math.floor(currentAge)));
+  const rBefore = qMortalityOneYearRisk(game.sex, ageForRisk, game.actParams);
+
+  if(isGood){
+    game.good++; applyBooster(it.emoji);
+    game.gradTarget = clamp(game.gradTarget * (1 - CONFIG.gradient.goodStep), CONFIG.gradient.minFactor, CONFIG.gradient.maxFactor);
+    const base = game.baseAgeRate;
+    game.ageRate = clamp(game.ageRate * (1 - CONFIG.aging.goodHitRelief), base*CONFIG.aging.minRateFactor, base*CONFIG.aging.maxRateFactor);
+  }else{
+    game.bad++; applyHazard(it.emoji);
+    game.gradTarget = clamp(game.gradTarget * (1 + CONFIG.gradient.badStep), CONFIG.gradient.minFactor, CONFIG.gradient.maxFactor);
+    const base = game.baseAgeRate;
+    game.ageRate = clamp(game.ageRate * (1 + CONFIG.aging.badHitBoost), base*CONFIG.aging.minRateFactor, base*CONFIG.aging.maxRateFactor);
+  }
+  game.actParams = buildQParams({ledger:game.actualLedger, sex:game.sex}, true);
+  game.eadDirty = true;
+
+  const rAfter = qMortalityOneYearRisk(game.sex, ageForRisk, game.actParams);
+  const d = rAfter - rBefore;
+  const pp = (d*100).toFixed(2);
+  const msg = `1y risk ${d>=0?'+':''}${pp} pp → ${(rAfter*100).toFixed(2)}%`;
+  addToast(it.x, it.y-24, msg, isGood);
+  burstConfetti(it.x, it.y-10, isGood);
+}
+
+/* ---------------------------- Hazard/booster mapping ---------------------------- */
+function applyHazard(emoji){
+  const L=game.actualLedger;
+  switch(emoji){
+    case '🚬':
+      L.smokeCat = Math.min(4, (L.smokeCat||0)+1);
+      addToast(game.sled.x, game.sled.y-40, `Smoking level → ${L.smokeCat}`, false);
+      break;
+    case '🍔':
+    case '🍟':
+      L.bmiDelta = clamp((L.bmiDelta||0)+0.3,-2,6);
+      break;
+    default:
+      break;
+  }
+}
+function applyBooster(emoji){
+  const L=game.actualLedger;
+  switch(emoji){
+    case '🥗':
+    case '🍎':
+      L.bmiDelta = clamp((L.bmiDelta||0)-0.2,-2,6); break;
+    case '🩹':
+      L.smokeCat = Math.max(0, (L.smokeCat||0)-1);
+      addToast(game.sled.x, game.sled.y-40, `Smoking level → ${L.smokeCat}`, true);
+      break;
+    case '👟': break;
+    case '🩺': break;
+  }
+}
+
+/* ---------------------------- Rendering ---------------------------- */
+function render(){
+  ctx.clearRect(0,0,W,H);
+  drawBackground(); drawSurvivalGround(); drawItems(); drawPlayer(); drawParticles(); drawToasts();
+}
+function drawBackground(){
+  ctx.fillStyle = hiContrast?'#111':'#0a1222'; ctx.fillRect(0,0,W,H);
+  if(reduceMotion) return;
+  ctx.fillStyle = hiContrast?'#333':'#0e1730';
+  for(let i=0;i<80;i++){ const x=(i*127 + performance.now()*0.018)%W; const y=(i*61 % H); ctx.fillRect(x,y,2,2); }
+}
+function drawSurvivalGround(){
+  const currentAge = clamp(game.ageProgress*100,0,100);
+  ctx.save(); ctx.beginPath(); const step=Math.max(2,Math.floor(W/80));
+  for(let x=0;x<=W;x+=step){ const a=ageAtScreenX(x,currentAge); const y=yOnCurve(a); if(x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }
+  ctx.strokeStyle = hiContrast?'#777':'#1b2a46'; ctx.lineWidth=3; ctx.stroke();
+
+  if(game.ead){
+    const years=CONFIG.world.curveWindowYears;
+    const start=currentAge-2;
+    const x = ((game.ead - start)/years)*W;
+    if(x>=0&&x<=W){
+      ctx.strokeStyle = '#6ad1ff';
+      ctx.setLineDash([6,6]);
+      ctx.beginPath(); ctx.moveTo(x, H*0.2); ctx.lineTo(x, H*0.92); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+  ctx.restore();
+}
+function drawItems(){
+  for(const it of game.items){
+    if(it.type==='crystal'){ drawCrystal(it.x,it.y, it.hit?0.25:1, it.t||0); }
+    else if(it.type==='condition'){ drawCondition(it.x,it.y,it.cond.icon, it.hit?0.25:1); }
+    else { drawEmoji(it.emoji,it.x,it.y,26,it.hit?0.25:1); }
+  }
+}
+function drawPlayer(){
+  const p=game.sled; const age=clamp(game.ageProgress*100,0,100);
+  const avatar=ageToAvatar(age);
+  ctx.globalAlpha=0.12; ctx.beginPath(); ctx.ellipse(p.x,p.y+20,22,7,0,0,Math.PI*2); ctx.fillStyle='#000'; ctx.fill(); ctx.globalAlpha=1;
+  drawEmoji(avatar,p.x,p.y-10,28,1);
+}
+function ageToAvatar(age){ if(age<3) return '👶'; if(age<13) return '🧒'; if(age<30) return '🧑'; if(age<70) return '🧑'; return '🧓'; }
+function drawEmoji(char,x,y,size=24,alpha=1){ ctx.save(); ctx.globalAlpha=alpha; ctx.font=`${size}px system-ui, Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, emoji`; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(char,x,y); ctx.restore(); }
+
+function drawCondition(x,y,inner='!',alpha=1){
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x,y);
+  ctx.rotate(Math.PI/4);
+  ctx.fillStyle = '#ff3b3b';
+  ctx.strokeStyle = '#ffd4d4';
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  const s=18;
+  ctx.moveTo(0,-s); ctx.lineTo(s,0); ctx.lineTo(0,s); ctx.lineTo(-s,0); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.rotate(-Math.PI/4);
+  drawEmoji(inner,0,2,18,alpha);
+  ctx.restore();
+}
+
+function drawCrystal(x,y,alpha=1,t=0){
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const g = ctx.createRadialGradient(x,y,2,x,y,26);
+  g.addColorStop(0,'rgba(106,209,255,0.9)');
+  g.addColorStop(1,'rgba(106,209,255,0.0)');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,26,0,Math.PI*2); ctx.fill();
+  const s = 12 + Math.sin(t*4)*2;
+  ctx.translate(x,y);
+  ctx.rotate(0.2*Math.sin(t*2));
+  ctx.fillStyle='#6ad1ff';
+  ctx.strokeStyle='#c8f3ff';
+  ctx.lineWidth=1.5;
+  ctx.beginPath();
+  ctx.moveTo(0,-s);
+  ctx.lineTo(s*0.8,0);
+  ctx.lineTo(0,s);
+  ctx.lineTo(-s*0.8,0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawParticles(){
+  for(const p of game.particles){
+    const a = 1 - p.age/p.life;
+    ctx.globalAlpha = Math.max(0,a);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, p.y, p.size, p.size);
+  }
+  ctx.globalAlpha=1;
+}
+function drawToasts(){
+  for(const t of game.toasts){
+    const a = 1 - t.age/t.life;
+    ctx.globalAlpha = Math.max(0, Math.min(1, a));
+    ctx.font = 'bold 14px system-ui, sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='bottom';
+    ctx.fillStyle = t.good ? '#8df59b' : '#ff6b6b';
+    ctx.fillText(t.text, t.x, t.y);
+  }
+  ctx.globalAlpha=1;
+}
+
+/* ---------------------------- End & scoring ---------------------------- */
+function endRun(){
+  game.running=false; game.ended=true;
+  const deathAge = game.deathAge ?? (game.ageProgress*100);
+  const baseParams = buildQParams({ledger:healthyLedger(), sex:game.sex}, false);
+  const actParams = game.actParams;
+  const ages=[], S_base=[], S_act=[];
+  for(let a=0;a<=20;a++){ ages.push(a); S_base.push(game.baseline.S[a]); S_act.push(game.baseline.S[a]); }
+  let sB=S_base[S_base.length-1], sA=S_act[S_act.length-1];
+  for(let a=20;a<100;a++){
+    const pB=qMortalityOneYearRisk(game.sex,a,baseParams); sB*=(1-pB); ages.push(a+1); S_base.push(sB);
+    const pA=qMortalityOneYearRisk(game.sex,a,actParams); sA*=(1-pA); S_act.push(sA);
+  }
+  drawChart(ages,S_base,S_act);
+
+  const yearsOver70 = Math.max(0, Math.floor(deathAge - 70));
+  const xp = game.crystals*CONFIG.xp.perCrystal + yearsOver70*CONFIG.xp.perYearOver70;
+
+  resDeathAge.textContent = deathAge.toFixed(1)+' years';
+  resCrystals.textContent = String(game.crystals);
+  resXP.textContent = String(xp);
+  document.getElementById('modelInputs').textContent = JSON.stringify(actParams,null,2);
+  resultsEl.classList.remove('hidden');
+}
+function drawChart(ages,S0,S1){
+  const pad=28,w=chartCvs.width,h=chartCvs.height; chartCtx.clearRect(0,0,w,h);
+  chartCtx.strokeStyle='#22324d'; chartCtx.lineWidth=1.5; chartCtx.beginPath(); chartCtx.moveTo(pad,pad); chartCtx.lineTo(pad,h-pad); chartCtx.lineTo(w-pad,h-pad); chartCtx.stroke();
+  const xMin=ages[0], xMax=ages[ages.length-1], X=a=> pad+(a-xMin)/(xMax-xMin)*(w-2*pad), Y=s=> h - pad - s*(h-2*pad);
+  chartCtx.fillStyle='#9bb0c9'; chartCtx.font='12px system-ui, sans-serif';
+  for(let a=0;a<=100;a+=20){ const x=X(a); chartCtx.fillText(String(a), x-8, h-pad+14); }
+  for(let s=0;s<=1.001;s+=0.25){ const y=Y(s); chartCtx.fillText((s*100).toFixed(0)+'%', 2, y+4); }
+  chartCtx.beginPath(); for(let i=0;i<S0.length;i++){ const x=X(ages[i]), y=Y(S0[i]); if(i===0) chartCtx.moveTo(x,y); else chartCtx.lineTo(x,y);} chartCtx.strokeStyle='#9bb0c9'; chartCtx.lineWidth=2.4; chartCtx.stroke();
+  chartCtx.beginPath(); for(let i=0;i<S1.length;i++){ const x=X(ages[i]), y=Y(S1[i]); if(i===0) chartCtx.moveTo(x,y); else chartCtx.lineTo(x,y);} chartCtx.strokeStyle='#6ad1ff'; chartCtx.lineWidth=2.8; chartCtx.stroke();
+}
+
+/* ---------------------------- QMortality (ported) ---------------------------- */
+function qMortalityFemaleRaw(age,alcohol_cat6,b_AF,b_CCF,b_antipsychotic,b_anycancer,b_asthmacopd,b_carehome,b_corticosteroids,b_cvd,b_dementia,b_epilepsy,b_learning,b_legulcer,b_liverpancreas,b_parkinsons,b_poormobility,b_ra,b_renal,b_type1,b_type2,b_vte,bmi,c_hb,ethrisk,hes_admitprior_cat,high_lft,high_platlet,s1_appetiteloss,s1_dyspnoea,s1_weightloss,smoke_cat,surv,town){const survivor=[0,0.984712481498718,0.971753656864166];const Ialcohol=[0,-0.17435199441964358,-0.203798591500364,-0.14878661948505154,0.19346168639158545,0.3817719239353779];const Iethrisk=[0,0,-0.11843111221404919,-0.0079993587678865198,-0.081902484397867278,-0.20319672746383435,-0.28785222648805714,-0.38639173968228352,-0.635233968626985,-0.14311168318806736];const Ihesprior=[0,0.71833452784520391,1.0908031544870831,1.5451828140923398];const Ismoke=[0,0.16717454421875455,0.58142938294258628,0.72878990923139852,0.82857372978610067];let dage=age/10.0;let age_2=Math.pow(dage,-2)*Math.log(dage);let age_1=Math.pow(dage,-2);let dbmi=bmi/10.0;let bmi_2=Math.pow(dbmi,-.5);let bmi_1=Math.pow(dbmi,-1);age_1-=0.017261177301407;age_2-=0.035034108906984;bmi_1-=0.369150280952454;bmi_2-=0.607577383518219;town-=-0.626556754112244;let a=0;a+=Ialcohol[alcohol_cat6]+Iethrisk[ethrisk]+Ihesprior[hes_admitprior_cat]+Ismoke[smoke_cat];a+=age_1*1508.5794831250275+age_2*-1177.0684822755481+bmi_1*21.11334055392112+bmi_2*-24.573072524627506+town*0.024090769712966711;a+=b_AF*0.33252351760672627+b_CCF*0.50641683153270323+b_antipsychotic*0.47626506440705629+b_anycancer*0.64720089405422188+b_asthmacopd*0.17799721514652003+b_carehome*0.58739598785067482+b_corticosteroids*0.36337872520297626+b_cvd*0.27105365193809716+b_dementia*0.95977317585312327+b_epilepsy*0.20115762112157234+b_learning*0.13839328199993772+b_legulcer*0.4761272769263114+b_liverpancreas*0.47403357578242461+b_parkinsons*0.5909056393737474+b_poormobility*0.490040846668585+b_ra*0.25677327584936344+b_renal*0.67716274437051516+b_type1*0.31278391181876186+b_type2*0.29737933061072769+b_vte*0.17800465837401402+c_hb*0.65864248937343151+high_lft*0.47612237163655469+high_platlet*0.30756728264623784+s1_appetiteloss*0.26034225706835656+s1_dyspnoea*0.28273682823800972+s1_weightloss*0.22416624109881766;a+=age_1*(hes_admitprior_cat==1)*0.035158394211054912+age_1*(hes_admitprior_cat==2)*-109.51688232773282+age_1*(hes_admitprior_cat==3)*-351.35461904849859+age_1*b_CCF*-19.172161434263753+age_1*b_antipsychotic*-133.23319710519135+age_1*b_anycancer*197.79764343812712+age_1*b_carehome*8.7645882901669339+age_1*b_corticosteroids*-84.459168120389265+age_1*b_cvd*-152.38387535241887+age_1*b_dementia*-487.3745694179724+age_1*b_legulcer*-18.804673168408211+age_1*b_liverpancreas*-198.99668832418308+age_1*b_poormobility*-277.2509814649311+age_1*b_renal*-324.78820931977253+age_1*b_type2*-338.29925143948833+age_1*c_hb*-276.08981163116158+age_1*high_lft*-49.230107803540051+age_1*s1_dyspnoea*-302.95755539422584+age_1*town*-30.921452232393211;a+=age_2*(hes_admitprior_cat==1)*38.370462859015539+age_2*(hes_admitprior_cat==2)*124.56245187208052+age_2*(hes_admitprior_cat==3)*301.56145302592375+age_2*b_CCF*35.695415143517359+age_2*b_antipsychotic*108.84530135283519+age_2*b_anycancer*-67.154511000286746+age_2*b_carehome*35.012518187090471+age_2*b_corticosteroids*84.346405949139708+age_2*b_cvd*107.40673575348774+age_2*b_dementia*366.22552882732964+age_2*b_legulcer*43.785689595416926+age_2*b_liverpancreas*175.39443266246101+age_2*b_poormobility*201.44123891115208+age_2*b_renal*249.23729077547392+age_2*b_type2*228.42578996830144+age_2*c_hb*207.01357837124425+age_2*high_lft*63.150714909979797+age_2*s1_dyspnoea*220.40087676403087+age_2*town*22.53883663039359;return 100*(1-Math.pow(survivor[surv],Math.exp(a)));}
+function qMortalityMaleRaw(age,alcohol_cat6,b_AF,b_CCF,b_antipsychotic,b_anycancer,b_asthmacopd,b_carehome,b_corticosteroids,b_cvd,b_dementia,b_epilepsy,b_learning,b_legulcer,b_liverpancreas,b_parkinsons,b_poormobility,b_ra,b_renal,b_type1,b_type2,b_vte,bmi,c_hb,ethrisk,hes_admitprior_cat,high_lft,high_platlet,s1_appetiteloss,s1_dyspnoea,s1_weightloss,smoke_cat,surv,town){const survivor=[0,0.979335904121399,0.962403774261475];const Ialcohol=[0,-0.16708444071266923,-0.19847754653430327,-0.14812069089436303,0.10971438529866195,0.15725394819345351];const Iethrisk=[0,0,-0.24965163717239661,-0.26049990463239797,-0.24133720755286936,-0.40394222834821164,-0.34697110988245755,-0.34603088592097347,-0.44272774017815186,-0.28942689209683875];const Ihesprior=[0,0.68934794175929393,1.0537662135368995,1.4406087084524641];const Ismoke=[0,0.16732266494368642,0.53626307622435287,0.64071300129429687,0.76142775355784531];let dage=age/10.0;let age_1=Math.pow(dage,3);let age_2=Math.pow(dage,3)*Math.log(dage);let dbmi=bmi/10.0;let bmi_1=Math.pow(dbmi,-2);let bmi_2=Math.pow(dbmi,-2)*Math.log(dbmi);age_1-=412.15957641601562;age_2-=827.2606811523438;bmi_1-=0.134313449263573;bmi_2-=0.134822428226471;town-=-0.768538892269135;let a=0;a+=Ialcohol[alcohol_cat6]+Iethrisk[ethrisk]+Ihesprior[hes_admitprior_cat]+Ismoke[smoke_cat];a+=age_1*0.036449264416623731+age_2*-0.012551397612884483+bmi_1*8.3843196334505148+bmi_2*-14.491169010690488+town*0.035864309976869284;a+=b_AF*0.24652795256939328+b_CCF*0.55403227487129214+b_antipsychotic*0.46739784638231002+b_anycancer*0.71554141921220937+b_asthmacopd*0.14048940720646091+b_carehome*0.47749740140274688+b_corticosteroids*0.44814187560602808+b_cvd*0.21949118375326637+b_dementia*0.85224240410802432+b_epilepsy*0.21978453251695079+b_learning*0.19790563863902949+b_legulcer*0.50725636587795975+b_liverpancreas*0.3926368758303394+b_parkinsons*0.76990750076242376+b_poormobility*0.46367032348911708+b_ra*0.171097716110581+b_renal*0.62224745945823434+b_type1*0.25960721267267589+b_type2*0.25404811490464563+b_vte*0.14940777815558187+c_hb*0.74294697835779089+high_lft*0.51554764782943019+high_platlet*0.32097996321768341+s1_appetiteloss*0.30320102141305078+s1_dyspnoea*0.2502379577768637+s1_weightloss*0.21457581118166616;a+=age_1*(hes_admitprior_cat==1)*-0.013532242327052574+age_1*(hes_admitprior_cat==2)*-0.016429972869646901+age_1*(hes_admitprior_cat==3)*-0.01841971270496864+age_1*b_CCF*-0.0056375981438788851+age_1*b_antipsychotic*0.00095485764796618411+age_1*b_anycancer*-0.031427877556200419+age_1*b_carehome*0.0029194351023528052+age_1*b_corticosteroids*-0.0087098588393828367+age_1*b_cvd*-0.00092605474117238176+age_1*b_dementia*-0.0042226968131332939+age_1*b_legulcer*-0.0043408879675686162+age_1*b_liverpancreas*-0.011168661453064168+age_1*b_parkinsons*0.00086079795284955377+age_1*b_poormobility*-0.0032122568132298144+age_1*b_renal*-0.0062987873913596228+age_1*b_type2*0.00085440051789764356+age_1*c_hb*-0.0010907260684175104+age_1*high_lft*-0.01652938675188878+age_1*s1_dyspnoea*-0.000075221143666536882+age_1*town*-0.00026717600937716028;a+=age_2*(hes_admitprior_cat==1)*0.0052599500739404469+age_2*(hes_admitprior_cat==2)*0.0062723155776391801+age_2*(hes_admitprior_cat==3)*0.0068996134993599611+age_2*b_CCF*0.0020360323212952713+age_2*b_antipsychotic*-0.00059264792400968123+age_2*b_anycancer*0.0122622021504616+age_2*b_carehome*-0.0014190910591964706+age_2*b_corticosteroids*0.0031204374807641592+age_2*b_cvd*0.00028128230371338202+age_2*b_dementia*0.0011909366650632758+age_2*b_legulcer*0.001461894388467675+age_2*b_liverpancreas*0.0042685310892839612+age_2*b_parkinsons*-0.00071904072749267352+age_2*b_poormobility*0.0010674563935602573+age_2*b_renal*0.0021250162138427274+age_2*b_type2*-0.00049606890104562657+age_2*c_hb*0.0000336997335926709+age_2*high_lft*0.0065189455055333261+age_2*s1_dyspnoea*-0.00015312682439225768+age_2*town*0.000067583925031682729;return 100*(1-Math.pow(survivor[surv],Math.exp(a)));}
+function qMortalityOneYearRisk(sex,age,params){ const f=(sex==='F')?qMortalityFemaleRaw:qMortalityMaleRaw; if(age<20) return 0.0002; return f(age,params.alcohol_cat6,params.b_AF,params.b_CCF,params.b_antipsychotic,params.b_anycancer,params.b_asthmacopd,params.b_carehome,params.b_corticosteroids,params.b_cvd,params.b_dementia,params.b_epilepsy,params.b_learning,params.b_legulcer,params.b_liverpancreas,params.b_parkinsons,params.b_poormobility,params.b_ra,params.b_renal,params.b_type1,params.b_type2,params.b_vte,params.bmi,params.c_hb,params.ethrisk,params.hes_admitprior_cat,params.high_lft,params.high_platlet,params.s1_appetiteloss,params.s1_dyspnoea,params.s1_weightloss,params.smoke_cat,1,params.town)/100.0; }
+function buildQParams(context,useLedger){ const L=useLedger?context.ledger:healthyLedger(); const smoke_cat=clampInt(L.smokeCat??0,0,4); const bmi=clamp(26 + (useLedger?(L.bmiDelta||0):0),18,45); return { alcohol_cat6:1, ethrisk:1, hes_admitprior_cat:0, smoke_cat, b_AF:L.b_AF|0,b_CCF:L.b_CCF|0,b_antipsychotic:L.b_antipsychotic|0,b_anycancer:L.b_anycancer|0, b_asthmacopd:L.b_asthmacopd|0, b_carehome:L.b_carehome|0,b_corticosteroids:L.b_corticosteroids|0,b_cvd:L.b_cvd|0, b_dementia:L.b_dementia|0,b_epilepsy:L.b_epilepsy|0,b_learning:L.b_learning|0,b_legulcer:L.b_legulcer|0,b_liverpancreas:L.b_liverpancreas|0,b_parkinsons:L.b_parkinsons|0,b_poormobility:L.b_poormobility|0,b_ra:L.b_ra|0,b_renal:L.b_renal|0, b_type1:L.b_type1|0,b_type2:L.b_type2|0,b_vte:L.b_vte|0, c_hb:L.c_hb|0,high_lft:L.high_lft|0,high_platlet:L.high_platlet|0,town:0, bmi, s1_appetiteloss:L.s1_appetiteloss|0,s1_dyspnoea:L.s1_dyspnoea|0,s1_weightloss:L.s1_weightloss|0 }; }
+function clampInt(v,min,max){ v|=0; if(v<min) v=min; if(v>max) v=max; return v; }
+/* ---------------------------- Init ---------------------------- */
+document.getElementById('btnToggleContrast')?.addEventListener('click',()=>{ hiContrast=!hiContrast; document.body.classList.toggle('hi-contrast',hiContrast); });
+btnStart.focus();
+</script>
+</body>
+</html>
